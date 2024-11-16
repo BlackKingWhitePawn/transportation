@@ -1,2 +1,4 @@
-# transportation
-Transportation problems research | ВКР НИТУ МИСИС
+# Traffic forecasting
+Problems:
+- traffic intensity forecasting
+- 
