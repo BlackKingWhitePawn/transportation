@@ -1,1 +1,12 @@
+# data
 /data
+
+# local metadata
+venv
+.env
+
+# console scripts
+*.egg-info
+
+# python 
+**/__pycache__
