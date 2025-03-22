@@ -41,7 +41,7 @@ def get_na_intervals(df: pd.DataFrame) -> pd.DataFrame:
     return nan_intervals
 
 
-def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Timedelta), method:  Literal['exp_smooth', 'moving_average']):
+def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Timedelta), method: Literal['exp_smooth', 'moving_average']) -> pd.DataFrame:
     start, end, duration = nan_interval.start, nan_interval.end, nan_interval.duration
     if (method == 'exp_smooth'):
         # avaiable train data
@@ -68,11 +68,7 @@ def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Time
             ).fit()
             forecast = pd.DataFrame(pd.Series(fit.forecast(
                 steps=nan_counts)), columns=['forecast'])
-            train['forecast'] = forecast
-            forecast['volume'] = train['volume']
-            pd.concat([train, forecast]).plot()
-
-            pass
+            return forecast
         else:
             pass
 
@@ -80,13 +76,12 @@ def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Time
 def process_dataframe(path: str):
     df = initialize_data(path, 2024)
     nan_intervals = get_na_intervals(df)
-
-    def fill_interval(df, interval):
-        start, end, duration = interval
-        fill_na(df, interval, method='exp_smooth')
+    forecast_df = pd.DataFrame(index=df.index)
 
     for row in nan_intervals.itertuples():
-        fill_na(df, row, method='exp_smooth')
+        forecast = fill_na(df, row, method='exp_smooth')
+        if (forecast):
+            forecast_df['volume'] = forecast
 
 
 process_dataframe('test\input-data__19-03__23-28-55.csv')
