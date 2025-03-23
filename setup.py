@@ -11,7 +11,8 @@ setup(
         'numpy',
         'statsmodels',
         'tqdm',
-        'openpyxl'
+        'openpyxl',
+        'matplotlib'
     ],
     entry_points={
         'console_scripts': [
