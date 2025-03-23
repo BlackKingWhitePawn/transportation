@@ -10,12 +10,12 @@ Problems:
 Для запуска python файлов необходимо создать виртуальное окружение и установить зависимости
 
 ```code(sh)
-python3 -m venv .venv # создание локального виртуального окружения
-.venv/bin/activate # активация окружения
+python3 -m venv venv # создание локального виртуального окружения
+. venv/bin/activate # активация окружения (Linux)
 
 или 
 
-.\venv\Scripts\activate
+.\venv\Scripts\activate # (Windows)
 
 pip install --editable . # установка зависимостей
 ```

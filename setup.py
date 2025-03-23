@@ -7,6 +7,11 @@ setup(
     include_package_data=True,
     install_requires=[
         'Click',
+        'pandas',
+        'numpy',
+        'statsmodels',
+        'tqdm',
+        'openpyxl'
     ],
     entry_points={
         'console_scripts': [
