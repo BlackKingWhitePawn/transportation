@@ -10,3 +10,6 @@ venv
 
 # python 
 **/__pycache__
+
+# log
+log.txt

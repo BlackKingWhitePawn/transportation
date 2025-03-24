@@ -4,9 +4,87 @@ import json
 from typing import Union, Literal
 import statsmodels.api as sm
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from tqdm import tqdm
+import pathlib
+import datetime
+import numpy as np
 
 
-def initialize_data(path: str, year: int):
+def initialize_xslx_data(path: str):
+    df = pd.read_excel(path)
+    title = df.iloc[3]['Unnamed: 0']
+    df = df.drop([2, 3])
+    data_groups = {}
+    current_group = df.iloc[0].values[0]
+
+    for index, value in zip(df.iloc[0].index, df.iloc[0].values):
+        if (pd.isna(value)):
+            data_groups[current_group].append(index)
+        else:
+            current_group = value
+            data_groups[current_group] = [index]
+
+    data_dfs = []
+    index = pd.to_datetime(df['Unnamed: 0'][2:-3], dayfirst=True)
+
+    for group, cols in tqdm(zip(list(data_groups.keys())[1:], list(data_groups.values())[1:])):
+        data_df = df[cols].copy()
+        data_df.columns = data_df.iloc[1].values
+        data_df = data_df.drop([0, 1])[:-3]
+        data_df = data_df.set_index(index)
+        data_df.index = pd.to_datetime(data_df.index)
+        data_df.index.names = ['timestamp']
+        data_dfs.append((group, data_df))
+
+    return title, data_groups, data_dfs
+
+
+def predict_xslx(df, title):
+    predicted_df = pd.DataFrame(index=df.index)
+    for col in tqdm(df.columns):
+        data = df[col].to_frame().sort_index()
+        data['is_nan'] = data[col].isna().astype(int)
+        data['group'] = (data['is_nan'].diff() == 1).cumsum()
+        data = data.reset_index()
+        nan_intervals = data[data['is_nan'] == 1].groupby(
+            'group').agg(start=('timestamp', 'first'), end=('timestamp', 'last'))
+        data = data.set_index('timestamp')
+        data = data.drop(['is_nan', 'group'], axis=1)
+        nan_intervals['duration'] = nan_intervals['end'] - \
+            nan_intervals['start']
+        for interval in tqdm(nan_intervals.itertuples()):
+            if (len(interval) == 0):
+                predicted_df[f'{col} - predict'] = pd.Series(
+                    index=predicted_df.index)
+                continue
+            start, end, duration = interval.start, interval.end, interval.duration
+            train_end = data[:start].index[-2]
+            train_start = (
+                train_end - pd.Timedelta(days=train_end.weekday())).normalize()
+            train_start = data.iloc[data.index.get_indexer(
+                [train_start], method='nearest')[0]].name
+            train = data[train_start:train_end]
+            seasonal_periods = 24
+            if len(train) < seasonal_periods * 2:
+                train = pd.concat(
+                    [train, data[:train_start][len(train) - (seasonal_periods*2+1):-1]]).sort_index()
+            fit = ExponentialSmoothing(
+                train.values,
+                trend=None,
+                seasonal="add",
+                seasonal_periods=seasonal_periods,
+                damped_trend=False,
+            ).fit()
+            predict_index = data.index[data.index.get_loc(
+                start) - 1:data.index.get_loc(end) + 2]
+            nan_counts = len(data[start:end])
+            predicted_df.loc[predict_index,
+                             f'{title} - {col}: predict'] = fit.forecast(int(nan_counts + 2))
+
+    return predicted_df
+
+
+def initialize_csv_data(path: str, year: int):
     # puid_df = pd.read_csv(path)
     # puid_df['keys'] = puid_df['keys'].apply(ast.literal_eval)
     # puid_df['values'] = puid_df['values'].apply(ast.literal_eval)
@@ -73,8 +151,8 @@ def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Time
             pass
 
 
-def process_dataframe(path: str):
-    df = initialize_data(path, 2024)
+def process_csv_dataframe(path: str):
+    df = initialize_csv_data(path, 2024)
     nan_intervals = get_na_intervals(df)
     forecast_df = pd.DataFrame(index=df.index)
 
@@ -84,4 +162,25 @@ def process_dataframe(path: str):
             forecast_df['volume'] = forecast
 
 
-process_dataframe('test\input-data__19-03__23-28-55.csv')
+def process_xslx_dataframe(path: str):
+    title, data_groups, data_dfs = initialize_xslx_data(path)
+    resulted_df = pd.DataFrame(index=data_dfs[0][1].index)
+    for name, df in data_dfs:
+        predicted = predict_xslx(df, name)
+        resulted_df = pd.concat([resulted_df, predicted], axis=1)
+
+    info_row = [np.nan]
+    for col_name, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
+        info_row += [col_name] * len(cols)
+
+    resulted_df = resulted_df.reset_index()
+    # resulted_df.loc[-1] = info_row
+    resulted_df.index = resulted_df.index + 1
+    resulted_df = resulted_df.sort_index()
+    resulted_df = resulted_df.rename(columns={'timestamp': 'Дата'})
+    resulted_df['Дата'] = resulted_df['Дата'].astype(str)
+
+    return resulted_df
+
+
+process_xslx_dataframe('data/report1.xlsx')
