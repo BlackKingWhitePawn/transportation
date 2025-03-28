@@ -9,6 +9,7 @@ def write_to_predict_sheet(path, df):
         logger.info('Writing to Excel - create/update "predict" sheet')
         try:
             df.to_excel(excel_writer=writer,
-                        sheet_name='predict')
+                        sheet_name='Результаты',
+                        index=False)
         except:
             logger.error('Writing to Excel crashed')

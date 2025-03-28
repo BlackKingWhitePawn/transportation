@@ -8,9 +8,10 @@ from tqdm import tqdm
 import pathlib
 import datetime
 import numpy as np
+from pathlib import Path
 
 
-def initialize_xslx_data(path: str):
+def initialize_xslx_data(path: Path | str):
     df = pd.read_excel(path)
     title = df.iloc[3]['Unnamed: 0']
     df = df.drop([2, 3])
@@ -27,7 +28,7 @@ def initialize_xslx_data(path: str):
     data_dfs = []
     index = pd.to_datetime(df['Unnamed: 0'][2:-3], dayfirst=True)
 
-    for group, cols in tqdm(zip(list(data_groups.keys())[1:], list(data_groups.values())[1:])):
+    for group, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
         data_df = df[cols].copy()
         data_df.columns = data_df.iloc[1].values
         data_df = data_df.drop([0, 1])[:-3]
@@ -41,7 +42,7 @@ def initialize_xslx_data(path: str):
 
 def predict_xslx(df, title):
     predicted_df = pd.DataFrame(index=df.index)
-    for col in tqdm(df.columns):
+    for col in df.columns:
         data = df[col].to_frame().sort_index()
         data['is_nan'] = data[col].isna().astype(int)
         data['group'] = (data['is_nan'].diff() == 1).cumsum()
@@ -59,13 +60,13 @@ def predict_xslx(df, title):
                 continue
             start, end, duration = interval.start, interval.end, interval.duration
 
-            if (duration < pd.Timedelta(hours=5)):
-                interpolated = data[start - pd.Timedelta(hours=12): end + pd.Timedelta(hours=12)
-                                    ].interpolate(method='spline', order=2)
-                predict_index = data.index[data.index.get_loc(
-                    start):data.index.get_loc(end) + 1]
-                predicted_df[predict_index,
-                             f'{col} - predict'] = interpolated[predict_index]
+            # if (duration < pd.Timedelta(hours=5)):
+            #     interpolated = data[start - pd.Timedelta(hours=12): end + pd.Timedelta(hours=12)
+            #                         ].interpolate(method='spline', order=2)
+            #     predict_index = data.index[data.index.get_loc(
+            #         start):data.index.get_loc(end) + 1]
+            #     predicted_df[predict_index,
+            #                  f'{col} - predict'] = interpolated[predict_index]
 
             train_end = data[:start].index[-2]
             train_start = (
@@ -73,14 +74,16 @@ def predict_xslx(df, title):
             train_start = data.iloc[data.index.get_indexer(
                 [train_start], method='nearest')[0]].name
             train = data[train_start:train_end]
+            # eps = 10e-05
             seasonal_periods = 24
             if len(train) < seasonal_periods * 2:
                 train = pd.concat(
                     [train, data[:train_start][len(train) - (seasonal_periods*2+1):-1]]).sort_index()
+
             fit = ExponentialSmoothing(
                 train.values,
                 trend=None,
-                seasonal="add",
+                seasonal='add',
                 seasonal_periods=seasonal_periods,
                 damped_trend=False,
             ).fit()
@@ -171,25 +174,25 @@ def process_csv_dataframe(path: str):
             forecast_df['volume'] = forecast
 
 
-def process_xslx_dataframe(path: str):
+def process_xslx_dataframe(path: Path | str):
     title, data_groups, data_dfs = initialize_xslx_data(path)
     resulted_df = pd.DataFrame(index=data_dfs[0][1].index)
     for name, df in data_dfs:
         predicted = predict_xslx(df, name)
         resulted_df = pd.concat([resulted_df, predicted], axis=1)
 
-    info_row = [np.nan]
-    for col_name, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
-        info_row += [col_name] * len(cols)
+    # info_row = [np.nan]
+    # for col_name, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
+    #     info_row += [col_name] * len(cols)
 
     resulted_df = resulted_df.reset_index()
-    # resulted_df.loc[-1] = info_row
-    resulted_df.index = resulted_df.index + 1
+    # resulted_df.index = resulted_df.index + 1
     resulted_df = resulted_df.sort_index()
     resulted_df = resulted_df.rename(columns={'timestamp': 'Дата'})
-    resulted_df['Дата'] = resulted_df['Дата'].astype(str)
+    resulted_df = resulted_df.applymap(lambda x: str(x))
+    # resulted_df['Дата'] = resulted_df['Дата'].astype(str)
 
     return resulted_df
 
 
-process_xslx_dataframe('data/report1.xlsx')
+# process_xslx_dataframe('samples/report1.xlsx')
