@@ -58,6 +58,15 @@ def predict_xslx(df, title):
                     index=predicted_df.index)
                 continue
             start, end, duration = interval.start, interval.end, interval.duration
+
+            if (duration < pd.Timedelta(hours=5)):
+                interpolated = data[start - pd.Timedelta(hours=12): end + pd.Timedelta(hours=12)
+                                    ].interpolate(method='spline', order=2)
+                predict_index = data.index[data.index.get_loc(
+                    start):data.index.get_loc(end) + 1]
+                predicted_df[predict_index,
+                             f'{col} - predict'] = interpolated[predict_index]
+
             train_end = data[:start].index[-2]
             train_start = (
                 train_end - pd.Timedelta(days=train_end.weekday())).normalize()
