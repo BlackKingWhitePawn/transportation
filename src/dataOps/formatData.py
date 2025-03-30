@@ -11,8 +11,8 @@ import numpy as np
 from pathlib import Path
 
 
-def initialize_xslx_data(path):
-    df = pd.read_excel(path)
+def initialize_xslx_data(initial_df):
+    df = initial_df.copy()
     title = df.iloc[3]['Unnamed: 0']
     df = df.drop([2, 3])
     data_groups = {}
@@ -51,39 +51,36 @@ def predict_xslx(df, title):
             'group').agg(start=('timestamp', 'first'), end=('timestamp', 'last'))
         data = data.set_index('timestamp')
         data = data.drop(['is_nan', 'group'], axis=1)
+        data = data.astype(float)
         nan_intervals['duration'] = nan_intervals['end'] - \
             nan_intervals['start']
+        if (len(nan_intervals) == 0):
+            predicted_df[f'{title} - {col} - predict'] = pd.Series(
+                    index=predicted_df.index)
+            continue
         for interval in tqdm(nan_intervals.itertuples()):
             if (len(interval) == 0):
                 predicted_df[f'{col} - predict'] = pd.Series(
                     index=predicted_df.index)
                 continue
             start, end, duration = interval.start, interval.end, interval.duration
-
-            # if (duration < pd.Timedelta(hours=5)):
-            #     interpolated = data[start - pd.Timedelta(hours=12): end + pd.Timedelta(hours=12)
-            #                         ].interpolate(method='spline', order=2)
-            #     predict_index = data.index[data.index.get_loc(
-            #         start):data.index.get_loc(end) + 1]
-            #     predicted_df[predict_index,
-            #                  f'{col} - predict'] = interpolated[predict_index]
-
             train_end = data[:start].index[-2]
             train_start = (
                 train_end - pd.Timedelta(days=train_end.weekday())).normalize()
             train_start = data.iloc[data.index.get_indexer(
                 [train_start], method='nearest')[0]].name
             train = data[train_start:train_end]
-            # eps = 10e-05
+            eps = 10e-05
             seasonal_periods = 24
             if len(train) < seasonal_periods * 2:
                 train = pd.concat(
                     [train, data[:train_start][len(train) - (seasonal_periods*2+1):-1]]).sort_index()
 
+            train = np.log(train.fillna(train.mean()).applymap(lambda x: max(x, 1)) + eps)
             fit = ExponentialSmoothing(
                 train.values,
                 trend=None,
-                seasonal='add',
+                seasonal='mul',
                 seasonal_periods=seasonal_periods,
                 damped_trend=False,
             ).fit()
@@ -91,7 +88,7 @@ def predict_xslx(df, title):
                 start) - 1:data.index.get_loc(end) + 2]
             nan_counts = len(data[start:end])
             predicted_df.loc[predict_index,
-                             f'{title} - {col}: predict'] = fit.forecast(int(nan_counts + 2))
+                             f'{title} - {col}: predict'] = np.exp(fit.forecast(int(nan_counts + 2)))
 
     return predicted_df
 
@@ -175,24 +172,16 @@ def process_csv_dataframe(path: str):
 
 
 def process_xslx_dataframe(path):
-    title, data_groups, data_dfs = initialize_xslx_data(path)
+    initial_df = pd.read_excel(path, engine='openpyxl')
+    title, data_groups, data_dfs = initialize_xslx_data(initial_df)
     resulted_df = pd.DataFrame(index=data_dfs[0][1].index)
     for name, df in data_dfs:
         predicted = predict_xslx(df, name)
         resulted_df = pd.concat([resulted_df, predicted], axis=1)
 
-    # info_row = [np.nan]
-    # for col_name, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
-    #     info_row += [col_name] * len(cols)
-
     resulted_df = resulted_df.reset_index()
-    # resulted_df.index = resulted_df.index + 1
     resulted_df = resulted_df.sort_index()
     resulted_df = resulted_df.rename(columns={'timestamp': 'Дата'})
-    # resulted_df = resulted_df.applymap(lambda x: str(x))
     resulted_df['Дата'] = resulted_df['Дата'].astype(str)
 
-    return resulted_df
-
-
-# process_xslx_dataframe('samples/report1.xlsx')
+    return initial_df, resulted_df
