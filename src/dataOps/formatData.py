@@ -11,7 +11,7 @@ import numpy as np
 from pathlib import Path
 
 
-def initialize_xslx_data(path: Path | str):
+def initialize_xslx_data(path):
     df = pd.read_excel(path)
     title = df.iloc[3]['Unnamed: 0']
     df = df.drop([2, 3])
@@ -174,7 +174,7 @@ def process_csv_dataframe(path: str):
             forecast_df['volume'] = forecast
 
 
-def process_xslx_dataframe(path: Path | str):
+def process_xslx_dataframe(path):
     title, data_groups, data_dfs = initialize_xslx_data(path)
     resulted_df = pd.DataFrame(index=data_dfs[0][1].index)
     for name, df in data_dfs:
@@ -189,8 +189,8 @@ def process_xslx_dataframe(path: Path | str):
     # resulted_df.index = resulted_df.index + 1
     resulted_df = resulted_df.sort_index()
     resulted_df = resulted_df.rename(columns={'timestamp': 'Дата'})
-    resulted_df = resulted_df.applymap(lambda x: str(x))
-    # resulted_df['Дата'] = resulted_df['Дата'].astype(str)
+    # resulted_df = resulted_df.applymap(lambda x: str(x))
+    resulted_df['Дата'] = resulted_df['Дата'].astype(str)
 
     return resulted_df
 
