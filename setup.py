@@ -12,6 +12,7 @@ setup(
         'statsmodels',
         'tqdm',
         'openpyxl',
+        'xlsxwriter',
         'matplotlib'
     ],
     entry_points={
