@@ -46,6 +46,9 @@ def data_operations(path, format):
     if (path_object.is_dir()):
         for filePath in tqdm([f for f in path_object.iterdir() if f.is_file() and f.suffix in extensions]):
             process_file(filePath)
+    elif (path_object.is_file() and path_object.suffix in extensions):
+        process_file(path_object)
+
 
 
 if __name__ == "__main__":
