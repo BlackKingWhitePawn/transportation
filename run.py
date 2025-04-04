@@ -39,9 +39,9 @@ def data_operations(path, format):
             dataOps.process_csv_dataframe(path)
         elif (format == 'cd'):
             print(f'Обработка {path}')
-            initial_df, resulted_df = dataOps.process_xslx_dataframe(path)
+            initial_df, predicted = dataOps.process_xslx_dataframe(path)
             print(f'Запись в файл {path}')
-            writer.write_to_predict_sheet(path, initial_df, resulted_df)
+            writer.write_to_predict_sheet(path, initial_df, predicted)
 
     if (path_object.is_dir()):
         for filePath in tqdm([f for f in path_object.iterdir() if f.is_file() and f.suffix in extensions]):
