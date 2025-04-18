@@ -1,18 +1,24 @@
 import pandas as pd
-import ast
-import json
-from typing import Union, Literal
-import statsmodels.api as sm
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from tqdm import tqdm
-import pathlib
-import datetime
 import numpy as np
+from functools import reduce
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 from pathlib import Path
+import datetime
+import dateutil
+from typing import List
+from pandas.tseries.frequencies import to_offset
+from typing import Literal
 
+def initialize_xslx_data(initial_df):
+    df = initial_df.copy()
+    df = df.set_index(df.columns[0])
+    df.index = pd.to_datetime(df.index, 'coerce', dayfirst=True)
+    df = df[~df.index.isna()]
+    
+    return df
 
-def initialize_xslx_data(path):
-    df = pd.read_excel(path)
     title = df.iloc[3]['Unnamed: 0']
     df = df.drop([2, 3])
     data_groups = {}
@@ -39,61 +45,62 @@ def initialize_xslx_data(path):
 
     return title, data_groups, data_dfs
 
+def get_nan_intervals(series: pd.Series) -> List[pd.Series]:
+    na_mask = series.isna()
+    groups = (na_mask != na_mask.shift()).cumsum()
+    nan_intervals = series[na_mask].groupby(groups[na_mask])
 
-def predict_xslx(df, title):
-    predicted_df = pd.DataFrame(index=df.index)
-    for col in df.columns:
-        data = df[col].to_frame().sort_index()
-        data['is_nan'] = data[col].isna().astype(int)
-        data['group'] = (data['is_nan'].diff() == 1).cumsum()
-        data = data.reset_index()
-        nan_intervals = data[data['is_nan'] == 1].groupby(
-            'group').agg(start=('timestamp', 'first'), end=('timestamp', 'last'))
-        data = data.set_index('timestamp')
-        data = data.drop(['is_nan', 'group'], axis=1)
-        nan_intervals['duration'] = nan_intervals['end'] - \
-            nan_intervals['start']
-        for interval in tqdm(nan_intervals.itertuples()):
-            if (len(interval) == 0):
-                predicted_df[f'{col} - predict'] = pd.Series(
-                    index=predicted_df.index)
+    return [interval for _, interval in nan_intervals]
+
+def predict_xslx(data: pd.DataFrame) -> pd.Series:
+    df_empty = data.copy()
+    df_empty.loc[:, :] = np.nan
+    for col_name in data.columns:
+        col = data[col_name]
+        nan_intervals = get_nan_intervals(col)
+        if (len(nan_intervals) == 0):
+            continue
+        for interval in nan_intervals:
+            if (len(interval)) == 0:
                 continue
-            start, end, duration = interval.start, interval.end, interval.duration
-
-            # if (duration < pd.Timedelta(hours=5)):
-            #     interpolated = data[start - pd.Timedelta(hours=12): end + pd.Timedelta(hours=12)
-            #                         ].interpolate(method='spline', order=2)
-            #     predict_index = data.index[data.index.get_loc(
-            #         start):data.index.get_loc(end) + 1]
-            #     predicted_df[predict_index,
-            #                  f'{col} - predict'] = interpolated[predict_index]
-
-            train_end = data[:start].index[-2]
-            train_start = (
-                train_end - pd.Timedelta(days=train_end.weekday())).normalize()
-            train_start = data.iloc[data.index.get_indexer(
-                [train_start], method='nearest')[0]].name
-            train = data[train_start:train_end]
-            # eps = 10e-05
+            # конец заполненных данных
+            avaiable_train_end_index = col.index.get_indexer([interval.index[0]])
+            # доступные для обучения
+            avaiable_train = col.iloc[:avaiable_train_end_index[0]]
+            delta = pd.Timedelta(days=avaiable_train.index[-1].weekday())
+            # timestamp начала недели
+            week_start = (avaiable_train.index[-1] - delta).normalize()
+            # индекс начала недели
+            train_start = avaiable_train.index.get_indexer([week_start], method='backfill')
+            # трейн данные с начала недели
+            train = avaiable_train[train_start[0]:]
             seasonal_periods = 24
-            if len(train) < seasonal_periods * 2:
-                train = pd.concat(
-                    [train, data[:train_start][len(train) - (seasonal_periods*2+1):-1]]).sort_index()
-
+            min_len = seasonal_periods * 2
+            if len(train) < min_len:
+                # добавляются данные с прошлой недели если не хватате для обучения
+                if (len(avaiable_train[:train.index[0]][:-1]) < min_len - len(train)):
+                    continue
+                else:
+                    train = pd.concat([avaiable_train[:train.index[0]][:-1][:len(train) - (min_len+1):-1],train]).sort_index()
+            seasonal_periods = 24
+            eps = 10e-03
+            train = np.log(train.fillna(train.mean()).map(lambda x: max(x, 1)) + eps)
             fit = ExponentialSmoothing(
                 train.values,
                 trend=None,
-                seasonal='add',
+                seasonal='mul',
                 seasonal_periods=seasonal_periods,
                 damped_trend=False,
             ).fit()
-            predict_index = data.index[data.index.get_loc(
-                start) - 1:data.index.get_loc(end) + 2]
-            nan_counts = len(data[start:end])
-            predicted_df.loc[predict_index,
-                             f'{title} - {col}: predict'] = fit.forecast(int(nan_counts + 2))
+            left_i = col.index.get_loc(interval.index[0])
+            right_i = col.index.get_loc(interval.index[-1])
+            # предикт данных включая граничные значения
+            predict_index = col.iloc[left_i-1:right_i+2].index
+            # запись
+            df_empty.loc[predict_index,col_name] = np.exp(fit.forecast(len(interval) + 2))
+            # df.loc[predict_index,col_name] = np.exp(int(fit.forecast(len(interval) + 2)))
 
-    return predicted_df
+    return df_empty
 
 
 def initialize_csv_data(path: str, year: int):
@@ -175,24 +182,12 @@ def process_csv_dataframe(path: str):
 
 
 def process_xslx_dataframe(path):
-    title, data_groups, data_dfs = initialize_xslx_data(path)
-    resulted_df = pd.DataFrame(index=data_dfs[0][1].index)
-    for name, df in data_dfs:
-        predicted = predict_xslx(df, name)
-        resulted_df = pd.concat([resulted_df, predicted], axis=1)
+    initial_df = pd.read_excel(path, header=[2,3])
+    df = initialize_xslx_data(initial_df)
+    predicted = predict_xslx(df)
+    initial_df = initial_df.set_index(initial_df.columns[0])
+    initial_df.index = pd.to_datetime(initial_df.index, 'coerce', dayfirst=True)
+    initial_df = initial_df[~initial_df.index.isna()]
+    initial_df
 
-    # info_row = [np.nan]
-    # for col_name, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
-    #     info_row += [col_name] * len(cols)
-
-    resulted_df = resulted_df.reset_index()
-    # resulted_df.index = resulted_df.index + 1
-    resulted_df = resulted_df.sort_index()
-    resulted_df = resulted_df.rename(columns={'timestamp': 'Дата'})
-    # resulted_df = resulted_df.applymap(lambda x: str(x))
-    resulted_df['Дата'] = resulted_df['Дата'].astype(str)
-
-    return resulted_df
-
-
-# process_xslx_dataframe('samples/report1.xlsx')
+    return initial_df, predicted
