@@ -49,7 +49,20 @@ def data_operations(path, format):
     elif (path_object.is_file() and path_object.suffix in extensions):
         process_file(path_object)
 
-
+@main.command()
+@click.argument('path', type=str)
+def xlsx_split(path):
+    """
+Разделяет экспортированный из ЦУСАД файл на отедльные файлы с отчетами. 
+Если в экспортированном файле находится единственный отчет то сформирован будет только он.
+Итоговые файлы будут сгруппированы в директории по дорогам 
+Примеры:
+\nrun xlsx_split  \"C:\\Users\\riabt\\Downloads\"
+"""
+    path = Path(path)
+    if (path.is_file() and path.suffix == '.xlsx'):
+        
+    
 
 if __name__ == "__main__":
     main()

@@ -19,31 +19,6 @@ def initialize_xslx_data(initial_df):
     
     return df
 
-    title = df.iloc[3]['Unnamed: 0']
-    df = df.drop([2, 3])
-    data_groups = {}
-    current_group = df.iloc[0].values[0]
-
-    for index, value in zip(df.iloc[0].index, df.iloc[0].values):
-        if (pd.isna(value)):
-            data_groups[current_group].append(index)
-        else:
-            current_group = value
-            data_groups[current_group] = [index]
-
-    data_dfs = []
-    index = pd.to_datetime(df['Unnamed: 0'][2:-3], dayfirst=True)
-
-    for group, cols in zip(list(data_groups.keys())[1:], list(data_groups.values())[1:]):
-        data_df = df[cols].copy()
-        data_df.columns = data_df.iloc[1].values
-        data_df = data_df.drop([0, 1])[:-3]
-        data_df = data_df.set_index(index)
-        data_df.index = pd.to_datetime(data_df.index)
-        data_df.index.names = ['timestamp']
-        data_dfs.append((group, data_df))
-
-    return title, data_groups, data_dfs
 
 def get_nan_intervals(series: pd.Series) -> List[pd.Series]:
     na_mask = series.isna()
