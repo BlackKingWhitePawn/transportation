@@ -49,6 +49,7 @@ def data_operations(path, format):
     elif (path_object.is_file() and path_object.suffix in extensions):
         process_file(path_object)
 
+
 @main.command()
 @click.argument('path', type=str)
 def xlsx_split(path):
@@ -61,8 +62,8 @@ def xlsx_split(path):
 """
     path = Path(path)
     if (path.is_file() and path.suffix == '.xlsx'):
-        
-    
+        pass
+
 
 if __name__ == "__main__":
     main()
