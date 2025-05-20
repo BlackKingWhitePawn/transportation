@@ -4,6 +4,7 @@
 # local metadata
 venv
 .env
+**~lock.*
 
 # console scripts
 *.egg-info
