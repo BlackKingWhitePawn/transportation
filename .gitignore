@@ -1,5 +1,7 @@
 # data
 /data
+output_data
+output_excel
 
 # local metadata
 venv
