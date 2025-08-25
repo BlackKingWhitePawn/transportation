@@ -2,6 +2,9 @@
 /data
 output_data
 output_excel
+puid2024
+puid2024_processed
+*.rar
 
 # local metadata
 venv
