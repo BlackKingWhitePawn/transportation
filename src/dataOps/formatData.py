@@ -11,29 +11,69 @@ from typing import List
 from pandas.tseries.frequencies import to_offset
 from typing import Literal
 
+
 def initialize_xslx_data(initial_df):
     df = initial_df.copy()
     df = df.set_index(df.columns[0])
-    df.index = pd.to_datetime(df.index, 'coerce', dayfirst=True)
+    df.index = pd.to_datetime(df.index, "coerce", dayfirst=True)
     df = df[~df.index.isna()]
-    
+
     return df
 
 
 def get_nan_intervals(series: pd.Series) -> List[pd.Series]:
-    na_mask = series.isna()
-    groups = (na_mask != na_mask.shift()).cumsum()
-    nan_intervals = series[na_mask].groupby(groups[na_mask])
+    """
+    Возвращает список интервалов пропусков (подряд идущие NaN) в переданной серии.
+    Дополнительно трактует как пропуски: пустые строки, пробелы, 'na'/'nan'/'none'/'null'
+    (в любом регистре), а также дефисы ('-', '–', '—').
+    """
+    s = series.copy()
 
-    return [interval for _, interval in nan_intervals]
+    # Нормализуем "пустые" представления в NaN для object-колонок
+    if s.dtype == "O":
+        s = s.replace(
+            {
+                r"^\s*$": np.nan,  # пустые строки / только пробелы
+                r"^(?i:na|nan|none|null)$": np.nan,  # текстовые NA
+                r"^[\-–—]+$": np.nan,  # один/несколько дефисов
+            },
+            regex=True,
+        )
+
+    na_mask = s.isna()
+    if not na_mask.any():
+        return []
+
+    # Группируем подряд идущие NaN; fill_value=False важен для корректного старта ряда
+    groups = na_mask.ne(na_mask.shift(fill_value=False)).cumsum()
+    nan_groups = s[na_mask].groupby(groups[na_mask])
+
+    return [interval for _, interval in nan_groups]
+
 
 def predict_xslx(data: pd.DataFrame) -> pd.Series:
+    # --- ДОБАВЛЕНО: сделать индекс полноценным (каждый час от первого до последнего) ---
+    # гарантируем DatetimeIndex, сортируем, убираем NaT, строим полный почасовой индекс
+    if not isinstance(data.index, pd.DatetimeIndex):
+        data = data.copy()
+        data.index = pd.to_datetime(data.index, errors="coerce")
+    data = data[~data.index.isna()].sort_index()
+    if len(data.index) >= 2:
+        start, end = data.index[0], data.index[-1]
+        full_index = pd.date_range(
+            start=start, end=end, freq="H"
+        )  # сохранит минуты/секунды старта
+        data = data.reindex(
+            full_index
+        )  # пропущенные строки появятся с NaN по всем столбцам
+    # --- КОНЕЦ ДОБАВЛЕННОГО БЛОКА ---
+
     df_empty = data.copy()
     df_empty.loc[:, :] = np.nan
     for col_name in data.columns:
         col = data[col_name]
         nan_intervals = get_nan_intervals(col)
-        if (len(nan_intervals) == 0):
+        if len(nan_intervals) == 0:
             continue
         for interval in nan_intervals:
             if (len(interval)) == 0:
@@ -41,38 +81,104 @@ def predict_xslx(data: pd.DataFrame) -> pd.Series:
             # конец заполненных данных
             avaiable_train_end_index = col.index.get_indexer([interval.index[0]])
             # доступные для обучения
-            avaiable_train = col.iloc[:avaiable_train_end_index[0]]
+            avaiable_train = col.iloc[: avaiable_train_end_index[0]]
             delta = pd.Timedelta(days=avaiable_train.index[-1].weekday())
             # timestamp начала недели
             week_start = (avaiable_train.index[-1] - delta).normalize()
             # индекс начала недели
-            train_start = avaiable_train.index.get_indexer([week_start], method='backfill')
+            train_start = avaiable_train.index.get_indexer(
+                [week_start], method="backfill"
+            )
             # трейн данные с начала недели
-            train = avaiable_train[train_start[0]:]
+            train = avaiable_train[train_start[0] :]
             seasonal_periods = 24
             min_len = seasonal_periods * 2
             if len(train) < min_len:
-                # добавляются данные с прошлой недели если не хватате для обучения
-                if (len(avaiable_train[:train.index[0]][:-1]) < min_len - len(train)):
-                    continue
+                pre = avaiable_train.loc[: train.index[0]].iloc[
+                    :-1
+                ]  # всё раньше, исключая саму точку
+                need = min_len - len(train)
+                if len(pre) >= need:
+                    # добираем ровно сколько нужно
+                    train = pd.concat([pre.iloc[-need:], train]).sort_index()
                 else:
-                    train = pd.concat([avaiable_train[:train.index[0]][:-1][:len(train) - (min_len+1):-1],train]).sort_index()
+                    # добрать не получается -> ИНТЕРПОЛЯЦИЯ на целевой диапазон
+                    left_i = col.index.get_loc(interval.index[0])
+                    right_i = col.index.get_loc(interval.index[-1])
+                    predict_index = col.index[
+                        max(0, left_i - 1) : min(len(col), right_i + 2)
+                    ]
+                    col_num = pd.to_numeric(col, errors="coerce")
+
+                    # интерполируем в лог-пространстве => гарантированно >0 после обратного преобразования
+                    eps_interp = 1e-3
+                    col_pos = col_num.mask(
+                        col_num <= 0, np.nan
+                    )  # не допускаем log(<=0)
+                    s_log = np.log(col_pos + eps_interp)
+
+                    # сначала пробуем spline(2), далее time, затем linear — все в лог-пространстве
+                    s_filled = None
+                    try:
+                        s_filled = s_log.interpolate(
+                            method="spline", order=2, limit_direction="both"
+                        )
+                    except Exception:
+                        pass
+                    if s_filled is None or s_filled.isna().any():
+                        try:
+                            s_filled = s_log.interpolate(
+                                method="time", limit_direction="both"
+                            )
+                        except Exception:
+                            s_filled = s_log.interpolate(
+                                method="linear", limit_direction="both"
+                            )
+
+                    # обратно из логов и защита от отрицательных из-за вычитания eps (теоретически)
+                    filled = np.exp(s_filled) - eps_interp
+                    filled = filled.clip(lower=0)
+
+                    # добьём оставшиеся NaN на всякий случай (краевые эффекты)
+                    filled = (
+                        filled.fillna(method="ffill").fillna(method="bfill").fillna(0)
+                    )
+
+                    df_empty.loc[predict_index, col_name] = filled.loc[
+                        predict_index
+                    ].values
+
+                    continue  # к следующему интервалу
+                # добавляются данные с прошлой недели если не хватате для обучения
+                # if len(avaiable_train[: train.index[0]][:-1]) < min_len - len(train):
+                #     continue
+                # else:
+                #     train = pd.concat(
+                #         [
+                #             avaiable_train[: train.index[0]][:-1][
+                #                 : len(train) - (min_len + 1) : -1
+                #             ],
+                #             train,
+                #         ]
+                #     ).sort_index()
             seasonal_periods = 24
             eps = 10e-03
             train = np.log(train.fillna(train.mean()).map(lambda x: max(x, 1)) + eps)
             fit = ExponentialSmoothing(
                 train.values,
                 trend=None,
-                seasonal='mul',
+                seasonal="mul",
                 seasonal_periods=seasonal_periods,
                 damped_trend=False,
             ).fit()
             left_i = col.index.get_loc(interval.index[0])
             right_i = col.index.get_loc(interval.index[-1])
             # предикт данных включая граничные значения
-            predict_index = col.iloc[left_i-1:right_i+2].index
+            predict_index = col.iloc[left_i - 1 : right_i + 2].index
             # запись
-            df_empty.loc[predict_index,col_name] = np.exp(fit.forecast(len(interval) + 2))
+            df_empty.loc[predict_index, col_name] = np.exp(
+                fit.forecast(len(interval) + 2)
+            )
             # df.loc[predict_index,col_name] = np.exp(int(fit.forecast(len(interval) + 2)))
 
     return df_empty
@@ -91,55 +197,64 @@ def initialize_csv_data(path: str, year: int):
     #     'speed'), keys.index('occupancy')]
 
     df = pd.read_csv(path)
-    df = df.set_index('index')
+    df = df.set_index("index")
     df.index = pd.to_datetime(df.index)
 
     year_range = pd.date_range(
-        f'{year}-01-01 00:00', f'{year}-12-31 23:55', freq='5Min')
+        f"{year}-01-01 00:00", f"{year}-12-31 23:55", freq="5Min"
+    )
     df = df.reindex(year_range)
 
     return df
 
 
 def get_na_intervals(df: pd.DataFrame) -> pd.DataFrame:
-    df['is_nan'] = df['volume'].isna().astype(int)
-    df['group'] = (df['is_nan'].diff() == 1).cumsum()
+    df["is_nan"] = df["volume"].isna().astype(int)
+    df["group"] = (df["is_nan"].diff() == 1).cumsum()
     df = df.reset_index()
-    nan_intervals = df[df['is_nan'] == 1].groupby(
-        'group').agg(start=('index', 'first'), end=('index', 'last'))
-    df = df.set_index('index')
-    df = df.drop(['is_nan', 'group'], axis=1)
-    nan_intervals['duration'] = nan_intervals['end'] - nan_intervals['start']
+    nan_intervals = (
+        df[df["is_nan"] == 1]
+        .groupby("group")
+        .agg(start=("index", "first"), end=("index", "last"))
+    )
+    df = df.set_index("index")
+    df = df.drop(["is_nan", "group"], axis=1)
+    nan_intervals["duration"] = nan_intervals["end"] - nan_intervals["start"]
     return nan_intervals
 
 
-def fill_na(df: pd.DataFrame, nan_interval: (pd.Timestamp, pd.Timestamp, pd.Timedelta), method: Literal['exp_smooth', 'moving_average']) -> pd.DataFrame:
+def fill_na(
+    df: pd.DataFrame,
+    nan_interval: (pd.Timestamp, pd.Timestamp, pd.Timedelta),
+    method: Literal["exp_smooth", "moving_average"],
+) -> pd.DataFrame:
     start, end, duration = nan_interval.start, nan_interval.end, nan_interval.duration
-    if (method == 'exp_smooth'):
+    if method == "exp_smooth":
         # avaiable train data
-        max_train_len = len(df[~df['volume'].isna()][:start])
+        max_train_len = len(df[~df["volume"].isna()][:start])
         if max_train_len == 0:
             return
         # check type of interval
-        if (duration > pd.Timedelta(days=5)):
+        if duration > pd.Timedelta(days=5):
             return
-        elif (duration > pd.Timedelta(hours=10)):
-            train = df[~df['volume'].isna()][start -
-                                             pd.Timedelta(days=7):start][:-1]
+        elif duration > pd.Timedelta(hours=10):
+            train = df[~df["volume"].isna()][start - pd.Timedelta(days=7) : start][:-1]
             first_timestamp = train.index[-1]
-            train_start = (first_timestamp -
-                           pd.Timedelta(days=first_timestamp.weekday())).normalize()
+            train_start = (
+                first_timestamp - pd.Timedelta(days=first_timestamp.weekday())
+            ).normalize()
             train = train[train_start:]
             nan_counts = (int)((end - start) / pd.Timedelta(minutes=5))
             fit = ExponentialSmoothing(
-                train['volume'],
+                train["volume"],
                 trend=None,
-                seasonal='add',
+                seasonal="add",
                 seasonal_periods=24 * 60 / 5,
                 damped_trend=False,
             ).fit()
-            forecast = pd.DataFrame(pd.Series(fit.forecast(
-                steps=nan_counts)), columns=['forecast'])
+            forecast = pd.DataFrame(
+                pd.Series(fit.forecast(steps=nan_counts)), columns=["forecast"]
+            )
             return forecast
         else:
             pass
@@ -151,18 +266,22 @@ def process_csv_dataframe(path: str):
     forecast_df = pd.DataFrame(index=df.index)
 
     for row in nan_intervals.itertuples():
-        forecast = fill_na(df, row, method='exp_smooth')
-        if (forecast):
-            forecast_df['volume'] = forecast
+        forecast = fill_na(df, row, method="exp_smooth")
+        if forecast:
+            forecast_df["volume"] = forecast
 
 
 def process_xslx_dataframe(path):
-    initial_df = pd.read_excel(path, header=[2,3])
+    initial_df = pd.read_excel(path, header=[2, 3])
     df = initialize_xslx_data(initial_df)
     predicted = predict_xslx(df)
     initial_df = initial_df.set_index(initial_df.columns[0])
-    initial_df.index = pd.to_datetime(initial_df.index, 'coerce', dayfirst=True)
+    initial_df.index = pd.to_datetime(initial_df.index, "coerce", dayfirst=True)
     initial_df = initial_df[~initial_df.index.isna()]
     initial_df
 
     return initial_df, predicted
+
+
+if __name__ == "__main__":
+    process_xslx_dataframe("test_broken.xlsx")

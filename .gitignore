@@ -4,12 +4,16 @@ output_data
 output_excel
 puid2024
 puid2024_processed
+puid2024_restored
+puid2024_2608
+puid_2024_missing_110925
 *.rar
 
 # local metadata
 venv
 .env
 **~lock.*
+.vscode
 
 # console scripts
 *.egg-info
